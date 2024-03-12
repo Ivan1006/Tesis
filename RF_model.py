@@ -8,6 +8,8 @@ import re
 from openpyxl import load_workbook
 from PyPDF2 import PdfReader
 from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.decomposition import TruncatedSVD
+
 # def extraer_texto_pdf(ruta_archivo):
 #     with open(ruta_archivo, 'rb') as archivo:
 #         lector_pdf = PdfReader(archivo)
@@ -60,22 +62,25 @@ data = data.drop(indices_a_eliminar)
 
 data['JUSTIFICACION'] = data['JUSTIFICACION'].apply(limpiar_texto)
 
-frecuencias = data['RUBRO'].value_counts()
-umbral = frecuencias.quantile(0.8)
+# data['RUBRO ACTUALIZADO'] = data.apply(lambda fila: fila['RUBRO'] if frecuencias[fila['RUBRO']] > umbral else 0, axis=1)
 
-print(umbral)
-
-# # Crear 'RUBRO ACTUALIZADO' que conserva solo los valores de 'RUBRO' en el top 20% más frecuente
-data['RUBRO ACTUALIZADO'] = data.apply(lambda fila: fila['RUBRO'] if frecuencias[fila['RUBRO']] > umbral else 0, axis=1)
-
-# # Crear 'PRODUCTO RELACIONADO ACTUALIZADO' que conserva los valores de 'PRODUCTO RELACIONADO' donde 'RUBRO' está en el top 20% más frecuente
-data['PRODUCTO RELACIONADO ACTUALIZADO'] = data.apply(lambda fila: fila['PRODUCTO RELACIONADO'] if frecuencias[fila['RUBRO']] > umbral else 0, axis=1)
-
+# data['PRODUCTO RELACIONADO ACTUALIZADO'] = data.apply(lambda fila: fila['PRODUCTO RELACIONADO'] if frecuencias[fila['RUBRO']] > umbral else 0, axis=1)
 
 X = data['JUSTIFICACION']
 
-data['Etiquetas'] = list(zip(data['RUBRO ACTUALIZADO'], data['PRODUCTO RELACIONADO ACTUALIZADO']))
-data['Etiquetas'] = data['Etiquetas'].apply(lambda x: tuple(str(i) for i in x))
+data['Etiquetas'] = list(zip(data['RUBRO'], data['PRODUCTO RELACIONADO']))
+
+
+
+frecuencias = data['Etiquetas'].value_counts()
+# umbral = frecuencias.quantile(0.8)
+# print(umbral)
+
+data['Etiquetas'] = data.apply(lambda fila: fila['Etiquetas'] if frecuencias[fila['Etiquetas']] > 90 else (0, 0), axis=1)
+
+
+# print(data['Etiquetas'].value_counts())
+# print(data['Etiquetas'])
 
 
 
@@ -84,33 +89,42 @@ mlb = MultiLabelBinarizer()
 y = mlb.fit_transform(data['Etiquetas'])
 
 # División del conjunto de datos
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# No necesitas cambiar el vectorizador TF-IDF ni los parámetros del RandomForest
-pipeline = Pipeline([
-    ('tfidf', TfidfVectorizer()),
-    ('clf', RandomForestClassifier(random_state=42))
-])
 
  
+# # param_grid = {
+# #     'clf__n_estimators': [300, 400, 500],
+# #     'clf__max_depth': [30, 40, None],
+# #     'clf__min_samples_split': [2, 5, 10],
+# #     'clf__min_samples_leaf': [1, 2, 4],
+# #     'clf__max_features': ['sqrt']  
+# # }
+
 param_grid = {
-    'clf__n_estimators': [300, 400, 500],
-    'clf__max_depth': [30, 40, None],
-    'clf__min_samples_split': [2, 5, 10],
-    'clf__min_samples_leaf': [1, 2, 4],
-    'clf__max_features': ['sqrt']  
+    'n_estimators': 400,
+    'max_depth': None,
+    'min_samples_split': 2,
+    'min_samples_leaf': 1,
+    'max_features': 'sqrt' 
 }
 
 
-grid_search = GridSearchCV(pipeline, param_grid, cv=5, n_jobs=-1, verbose=2)
-grid_search.fit(X_train, y_train)
+# grid_search = GridSearchCV(pipeline, param_grid, cv=5, n_jobs=-1, verbose=2)
+# grid_search.fit(X_train, y_train)
+
+pipeline = Pipeline([
+    ('tfidf', TfidfVectorizer()),
+    ('clf', RandomForestClassifier(random_state=42, **param_grid))
+])
 
 
-print("Mejores parámetros: ", grid_search.best_params_)
+# print("Mejores parámetros: ", grid_search.best_params_)
 
 
-predictions = grid_search.best_estimator_.predict(X_test)
-
+# predictions = grid_search.best_estimator_.predict(X_test)
+pipeline.fit(X_train, y_train)
+predictions = pipeline.predict(X_test)
 
 for i, class_label in enumerate(mlb.classes_):
     print(f"Clasificación para la etiqueta {class_label}:")
@@ -118,14 +132,15 @@ for i, class_label in enumerate(mlb.classes_):
 
 
 nueva_justificacion = """COSMOLAC S.A.S Somos una empresa constituida desde el año 2013 dedicados a la elaboración y distribución de productos lácteos en polvo de excelente calidad garantizando la inocuidad y la satisfacción de los clientes, nuestros productos son: leche entera fortificada con H y V Fortificada con vitaminas (A y D3) y hierro aminoquelado, lo que incrementa el valor nutricional. Leche entera azucarada mezclada con azúcar pulverizada en una proporción del (1%). Alimento lácteo Producto obtenido a partir de la mezcla balanceada de leches en polvo, maltodextrina, suero lácteo y grasa. Dicha actividad es desarrollada en el municipio de Zipaquirá, Cundinamarca. Para el 2024, se tiene proyectado un valor de compras al sector agropecuario nacional de $182.365 millones de pesos de leche cruda. """
-limpiar_texto(nueva_justificacion)
-prediccion = grid_search.best_estimator_.predict([nueva_justificacion])
+justificacion_limpia = limpiar_texto(nueva_justificacion)
 
-# Desempaquetar las predicciones para rubro y producto
+
+
+prediccion = pipeline.predict([justificacion_limpia])
+
 prediccion_rubro = prediccion[0][0]
 prediccion_producto = prediccion[0][1]
 
-# Si la predicción del rubro es 0, muestra "Preguntar al analista"
 if prediccion_rubro == 0:
     print("Rubro: Preguntar al analista")
 else:
