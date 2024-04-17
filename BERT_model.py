@@ -6,6 +6,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 import re
+from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.metrics import classification_report
 
 
@@ -15,18 +16,37 @@ def limpiar_texto(texto):
     texto = re.sub(r'\s+', ' ', texto).strip()
     return texto
 
-data = pd.read_excel('Informacion.xlsx')
+data = pd.read_excel('exceles_info/Informacion.xlsx')
+
+print(data['JUSTIFICACION'])
+
+indices_a_eliminar = data[~data['JUSTIFICACION'].apply(lambda x: isinstance(x, str))].index
+
+data = data.drop(indices_a_eliminar)
+
 data['JUSTIFICACION'] = data['JUSTIFICACION'].apply(limpiar_texto)
 
-frecuencias = data['PRODUCTO RELACIONADO'].value_counts()
-umbral = frecuencias.quantile(0.80) 
-print(umbral)
-data['PRODUCTO RELACIONADO ACTUALIZADO'] = data['PRODUCTO RELACIONADO'].apply(
-    lambda x: 0 if frecuencias[x] <= umbral else x)
-print(data['PRODUCTO RELACIONADO ACTUALIZADO'].value_counts())
-label_encoder = LabelEncoder()
-data['PRODUCTO RELACIONADO ACTUALIZADO'] = label_encoder.fit_transform(data['PRODUCTO RELACIONADO ACTUALIZADO'].astype(str))
 
+data['Etiquetas'] = list(zip(data['RUBRO'], data['PRODUCTO RELACIONADO']))
+
+data.drop_duplicates(subset=['NIT','Etiquetas'],inplace=True)
+
+
+frecuencias = data['Etiquetas'].value_counts()
+
+data['Etiquetas'] = data.apply(lambda fila: fila['Etiquetas'] if frecuencias[fila['Etiquetas']] > 90 else (0, 0), axis=1)
+
+#print(data)
+print(data['Etiquetas'].value_counts())
+# print(data['Etiquetas'])
+
+
+#Procesamiento de las etiquetas
+X = data['JUSTIFICACION']
+mlb = MultiLabelBinarizer()
+y = mlb.fit_transform(data['Etiquetas'])
+label_encoder = LabelEncoder()
+data['Etiquetas'] = label_encoder.fit_transform(data['Etiquetas'].astype(str))
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 max_length = 256
 
@@ -50,7 +70,7 @@ def tokenize_function(examples):
 tokenized_inputs = tokenize_function(data.to_dict(orient='list'))
 input_ids = torch.tensor(tokenized_inputs['input_ids'])
 attention_masks = torch.tensor(tokenized_inputs['attention_mask'])
-labels = torch.tensor(data['PRODUCTO RELACIONADO ACTUALIZADO'].values)
+labels = torch.tensor(data['Etiquetas'].values)
 
 dataset = TensorDataset(input_ids, attention_masks, labels)
 train_size = int(0.8 * len(dataset))
