@@ -1,84 +1,89 @@
 import pandas as pd
 import random
-from transformers import pipeline
 import re
 from transformers import pipeline
 
-
+# Función para limpiar el texto
 def limpiar_texto(texto):
-
     texto = texto.lower()
-
     texto = re.sub(r'[^\w\s]', ' ', texto)
-
     texto = re.sub(r'\s+', ' ', texto).strip()
-    
     return texto
 
-
-
-
+# Cargar los datos desde el archivo Excel
 data = pd.read_excel('exceles_info/Informacion.xlsx')
-
-print(data['JUSTIFICACION'])
-
-data = data.sample(n=200)
-
-data.reset_index(drop=True, inplace=True)
-
-indices_a_eliminar = data[~data['JUSTIFICACION'].apply(lambda x: isinstance(x, str))].index
-
-data = data.drop(indices_a_eliminar)
-
-data['JUSTIFICACION'] = data['JUSTIFICACION'].apply(limpiar_texto)
-
 data['Etiquetas'] = list(zip(data['RUBRO'], data['PRODUCTO RELACIONADO']))
-
 data.drop_duplicates(subset=['NIT','Etiquetas'],inplace=True)
 
-frecuencias = data['Etiquetas'].value_counts()
+# Seleccionar 3000 datos aleatorios y limpiar las justificaciones
+frecuencias = data['Etiquetas'].value_counts() 
+print (frecuencias)
+data_filtered = data[data['Etiquetas'].apply(lambda x: 100 <= frecuencias[x] <= 300)]
+data_3000 = data_filtered.sample(n=min(300, len(data_filtered)))
 
-data['Etiquetas'] = data.apply(lambda fila: fila['Etiquetas'] if frecuencias[fila['Etiquetas']] > 90 else (0, 0), axis=1)
+data_3000.reset_index(drop=True, inplace=True)
+indices_a_eliminar = data_3000[~data_3000['JUSTIFICACION'].apply(lambda x: isinstance(x, str))].index
+data_3000 = data_3000.drop(indices_a_eliminar)
+data_3000['JUSTIFICACION'] = data_3000['JUSTIFICACION'].apply(limpiar_texto)
 
-# Calcula las frecuencias de cada etiqueta
-frecuencias = data['Etiquetas'].value_counts().reset_index()
-frecuencias.columns = ['Etiquetas', 'Frecuencia']
+# Crear etiquetas combinando 'RUBRO' y 'PRODUCTO RELACIONADO'
+data_3000['Etiquetas'] = list(zip(data_3000['RUBRO'], data_3000['PRODUCTO RELACIONADO']))
+data_3000.drop_duplicates(subset=['NIT','Etiquetas'], inplace=True)
 
-# Calcula el 10% de cada etiqueta
-frecuencias['Muestra'] = (frecuencias['Frecuencia'] * 0.1).round().astype(int)
+# Contar las frecuencias de las etiquetas
+frecuencias = data_3000['Etiquetas'].value_counts()
 
-# Asegura no tener muestras de tamaño cero
-frecuencias['Muestra'] = frecuencias['Muestra'].apply(lambda x: 1 if x == 0 else x)
+# Imprimir las frecuencias antes del filtro
+print("Frecuencias antes del filtro:")
+print(frecuencias)
 
-# Crea un DataFrame vacío para los ejemplos
-ejemplos_df = pd.DataFrame()
+# Filtrar etiquetas basado en frecuencia
+data_3000 = data_3000[data_3000.apply(lambda fila: frecuencias[fila['Etiquetas']] > 15, axis=1)]
+# Imprimir el DataFrame después del filtro
+print("Después del filtro:")
+print(data_3000)
 
-# Muestrea de 'data' para cada etiqueta
-for _, row in frecuencias.iterrows():
-    muestra = data[data['Etiquetas'] == row['Etiquetas']].sample(n=row['Muestra'])
-    ejemplos_df = pd.concat([ejemplos_df, muestra])
+# Seleccionar los 200 datos para clasificar
+datos_a_clasificar = data[~data.index.isin(data_3000.index)].sample(n=100)
+datos_a_clasificar['Etiquetas'] = list(zip(datos_a_clasificar['RUBRO'], datos_a_clasificar['PRODUCTO RELACIONADO']))
 
 
-prompt_base = "Clasifica el siguiente texto en base a los ejemplos:\n\n"
+# Crear un pipeline de clasificación de texto con GPT-3
+clasificador_llm = pipeline('zero-shot-classification', model='facebook/bart-large-mnli')
 
-for _, fila in ejemplos_df.iterrows():
-    prompt_base += f"Texto: \"{fila['JUSTIFICACION']}\" Clasificación: {fila['Etiquetas']}\n"
-# Cargar un modelo de lenguaje grande de Hugging Face
-generator = pipeline('text-generation', model="EleutherAI/gpt-neo-2.7B")
-print(ejemplos_df)
-# Función para clasificar un nuevo texto utilizando el prompt de few-shot
-def clasificar(texto):
-    prompt = prompt_base + f"Texto: \"{texto}\" Clasificación:"
-    print(prompt)
-    outputs = generator(prompt, max_length=50, num_return_sequences=1)
-    result = outputs[0]['generated_text'].split("Clasificación:")[-1].strip()  # Extraer solo la clasificación
-    return result
+# Función para clasificar texto utilizando few-shot learning con GPT-3
+def clasificar_llm(texto, etiquetas_posibles):
+    # Clasificar el texto utilizando few-shot learning
+    clasificacion = clasificador_llm(texto, etiquetas_posibles)
+    # Devolver la etiqueta predicha
+    return clasificacion['labels'][0]
 
-# Aplicar la clasificación a los textos que no fueron parte de los ejemplos
-datos_para_clasificar = data.drop(ejemplos_df.index)
+# Datos de entrenamiento
+textos_entrenamiento = data_3000['JUSTIFICACION'].tolist()
+etiquetas_entrenamiento = data_3000['Etiquetas'].tolist()
 
-# Puedes utilizar .apply() para clasificar el resto de los datos, pero ten en cuenta que esto puede ser lento
-# Es recomendable probar primero con una pequeña porción del DataFrame
-datos_para_clasificar['Clasificacion_Predicha'] = datos_para_clasificar['JUSTIFICACION'].apply(clasificar)
+# Función para preparar los ejemplos para few-shot learning
+def preparar_ejemplos(textos, etiquetas):
+    ejemplos = [{'text': texto, 'labels': etiqueta} for texto, etiqueta in zip(textos, etiquetas)]
+    print(ejemplos)
+    return ejemplos
 
-print(datos_para_clasificar[['JUSTIFICACION', 'Clasificacion_Predicha']])
+
+# Preparar los ejemplos para few-shot learning
+ejemplos_entrenamiento = preparar_ejemplos(textos_entrenamiento, etiquetas_entrenamiento)
+
+# Función para clasificar texto de prueba utilizando few-shot learning con GPT-3
+def clasificar_con_llm(texto):
+    # Verificar si el texto es válido
+    if isinstance(texto, str):
+        # Clasificar el texto utilizando few-shot learning
+        etiqueta_predicha = clasificar_llm(texto, etiquetas_entrenamiento)
+        return etiqueta_predicha
+    else:
+        return None  # O manejar el caso de texto no válido de otra manera
+
+# Aplicar la función de clasificación a los datos de prueba
+datos_a_clasificar['Etiquetas_LLM'] = datos_a_clasificar['JUSTIFICACION'].apply(clasificar_con_llm)
+
+# Imprimir los resultados de clasificación con few-shot learning
+print(datos_a_clasificar[['JUSTIFICACION', 'Etiquetas_LLM']])
