@@ -67,6 +67,7 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_
 
 # Modelo de Random forest
 inicio_rf = time()
+
 mejores_parametros_rf = {
     'n_estimators': 500,
     'max_depth': 30,

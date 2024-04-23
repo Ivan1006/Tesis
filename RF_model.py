@@ -10,6 +10,10 @@ from PyPDF2 import PdfReader
 from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.decomposition import TruncatedSVD
 import numpy as np
+from sklearn.preprocessing import label_binarize
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
+from itertools import cycle
 
 # def extraer_texto_pdf(ruta_archivo):
 #     with open(ruta_archivo, 'rb') as archivo:
@@ -54,35 +58,40 @@ def RF_model(data):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
 
 
-    param_grid = {
-        'clf__n_estimators': [300, 400, 500],
-        'clf__max_depth': [30, 40, None],
-        'clf__min_samples_split': [2, 5, 10],
-        'clf__min_samples_leaf': [1, 2, 4],
-        'clf__max_features': ['sqrt']  
-    }
-
-    pipeline = Pipeline([
-        ('tfidf', TfidfVectorizer(max_df=0.8,min_df=0.01)),
-        ('clf', RandomForestClassifier(random_state=42))
-    ])
-
-
     # param_grid = {
-    #     'n_estimators': 400,
-    #     'max_depth': None,
-    #     'min_samples_split': 2,
-    #     'min_samples_leaf': 1,
-    #     'max_features': 'sqrt' 
+    #     'clf__n_estimators': [300, 400, 500],
+    #     'clf__max_depth': [30, 40, None],
+    #     'clf__min_samples_split': [2, 5, 10],
+    #     'clf__min_samples_leaf': [1, 2, 4],
+    #     'clf__max_features': ['sqrt']  
     # }
 
-    grid_search = GridSearchCV(pipeline, param_grid, cv=5, n_jobs=4, verbose=2)
-    grid_search.fit(X_train, y_train)
-    print("Mejores parámetros: ", grid_search.best_params_)
+    # pipeline = Pipeline([
+    #     ('tfidf', TfidfVectorizer(max_df=0.8,min_df=0.01)),
+    #     ('clf', RandomForestClassifier(random_state=42))
+    # ])
 
+
+    mejores_parametros_rf = {
+        'n_estimators': 400,
+        'max_depth': None,
+        'min_samples_split': 2,
+        'min_samples_leaf': 1,
+        'max_features': 'sqrt' 
+    }
+
+    # grid_search = GridSearchCV(pipeline, param_grid, cv=5, n_jobs=4, verbose=2)
+    # grid_search.fit(X_train, y_train)
+    # print("Mejores parámetros: ", grid_search.best_params_)
+
+    pipeline = Pipeline([
+    ('tfidf', TfidfVectorizer(max_df=0.8,min_df=0.01)),
+    ('clf', RandomForestClassifier(random_state=42, **mejores_parametros_rf))
+])
 
     pipeline.fit(X_train, y_train)
-    predictions = pipeline.predict(X_test)
+    predictions= pipeline.predict(X_test)
+    probabilities_rf = pipeline.predict_proba(X_test)
 
     dfs = []
 
@@ -93,12 +102,42 @@ def RF_model(data):
         report_df = report_df.transpose()
         report_df['Etiqueta'] = class_label
         dfs.append(report_df)
+        # Concatena todos los DataFrames en uno solo
+        final_report_df = pd.concat(dfs)
 
-    # Concatena todos los DataFrames en uno solo
-    final_report_df = pd.concat(dfs)
+        # Guarda el DataFrame final en un archivo Excel
+        final_report_df.to_excel(r"exceles_info/classification_reports.xlsx")
+        classes = np.arange(len(mlb.classes_))
 
-    # Guarda el DataFrame final en un archivo Excel
-    final_report_df.to_excel(r"exceles_info/classification_reports.xlsx")
+
+
+
+    # Para Random Forest ROC
+
+    classes = np.arange(len(mlb.classes_))
+    y_test_binarized = label_binarize(y_test, classes=classes)
+
+
+    n_classes = len(probabilities_rf) 
+    colors = cycle(['blue', 'red', 'green', 'purple', 'orange'])
+    plt.figure(figsize=(7, 5))
+
+    for i, color in zip(range(n_classes), colors):
+        probas_ = probabilities_rf[i][:, 1]
+        fpr, tpr, thresholds = roc_curve(y_test_binarized[:, i], probas_)
+        roc_auc = auc(fpr, tpr)
+        plt.plot(fpr, tpr, color=color, lw=2, label=f'ROC curve of class {i} (area = {roc_auc:.2f})')
+
+    plt.plot([0, 1], [0, 1], 'k--', lw=2)
+    plt.xlim([-0.05, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Multiclass ROC Curve - Random Forest')
+    plt.legend(loc="lower right")
+    plt.show()
+    return y_test, probabilities_rf, mlb.classes_
+    
 
 
 # nueva_justificacion = """COSMOLAC S.A.S Somos una empresa constituida desde el año 2013 dedicados a la elaboración y distribución de productos lácteos en polvo de excelente calidad garantizando la inocuidad y la satisfacción de los clientes, nuestros productos son: leche entera fortificada con H y V Fortificada con vitaminas (A y D3) y hierro aminoquelado, lo que incrementa el valor nutricional. Leche entera azucarada mezclada con azúcar pulverizada en una proporción del (1%). Alimento lácteo Producto obtenido a partir de la mezcla balanceada de leches en polvo, maltodextrina, suero lácteo y grasa. Dicha actividad es desarrollada en el municipio de Zipaquirá, Cundinamarca. Para el 2024, se tiene proyectado un valor de compras al sector agropecuario nacional de $182.365 millones de pesos de leche cruda. """
