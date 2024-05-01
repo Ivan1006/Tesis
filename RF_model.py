@@ -3,7 +3,9 @@ from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import classification_report
+from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc
+import matplotlib.pyplot as plt
+import seaborn as sns
 import re
 from openpyxl import load_workbook
 from PyPDF2 import PdfReader
@@ -14,7 +16,7 @@ from sklearn.preprocessing import label_binarize
 from sklearn.metrics import roc_curve, auc
 import matplotlib.pyplot as plt
 from itertools import cycle
-
+from sklearn.preprocessing import LabelEncoder, MultiLabelBinarizer
 # def extraer_texto_pdf(ruta_archivo):
 #     with open(ruta_archivo, 'rb') as archivo:
 #         lector_pdf = PdfReader(archivo)
@@ -47,15 +49,17 @@ from itertools import cycle
 # texto_pdf = extraer_texto_pdf(r"D:\Tesis maestria\Langchain\pdfs\camara de comercio (2).pdf")
 # informacion = extraer_informacion(texto_pdf)
 
+
 def RF_model(data):
     #Procesamiento de las etiquetas
     X = data['JUSTIFICACION']
     mlb = MultiLabelBinarizer()
+    data['Etiquetas'] = data['Etiquetas'].apply(lambda x: [str(tup) for tup in x])
     y = mlb.fit_transform(data['Etiquetas'])
-
     print(data['Etiquetas'].value_counts())
     # División del conjunto de datos
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+    
 
 
     # param_grid = {
@@ -108,6 +112,19 @@ def RF_model(data):
         # Guarda el DataFrame final en un archivo Excel
         final_report_df.to_excel(r"exceles_info/classification_reports.xlsx")
         classes = np.arange(len(mlb.classes_))
+        df_rf =(classification_report(y_test, predictions,output_dict=True))
+        df_rf = pd.DataFrame(df_rf).transpose()
+        df_rf.to_excel(r"exceles_info/classification_report_model1.xlsx")
+    
+        # Calculando y visualizando la matriz de confusión para cada clase
+    for i, class_label in enumerate(mlb.classes_):
+        cm = confusion_matrix(y_test[:, i], predictions[:, i])
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.title(f'Matriz de Confusión para la etiqueta: {class_label}')
+        plt.ylabel('Verdaderos')
+        plt.xlabel('Predicciones')
+        plt.show()
 
 
 
@@ -137,7 +154,7 @@ def RF_model(data):
     plt.legend(loc="lower right")
     plt.show()
     return y_test, probabilities_rf, mlb.classes_
-    
+
 
 
 # nueva_justificacion = """COSMOLAC S.A.S Somos una empresa constituida desde el año 2013 dedicados a la elaboración y distribución de productos lácteos en polvo de excelente calidad garantizando la inocuidad y la satisfacción de los clientes, nuestros productos son: leche entera fortificada con H y V Fortificada con vitaminas (A y D3) y hierro aminoquelado, lo que incrementa el valor nutricional. Leche entera azucarada mezclada con azúcar pulverizada en una proporción del (1%). Alimento lácteo Producto obtenido a partir de la mezcla balanceada de leches en polvo, maltodextrina, suero lácteo y grasa. Dicha actividad es desarrollada en el municipio de Zipaquirá, Cundinamarca. Para el 2024, se tiene proyectado un valor de compras al sector agropecuario nacional de $182.365 millones de pesos de leche cruda. """

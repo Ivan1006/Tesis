@@ -32,7 +32,7 @@ def llm_model(data):
     print("Después del filtro:")
     print(data_3000)
 
-    datos_a_clasificar = data[~data.index.isin(data_3000.index)].sample(n=100)
+    datos_a_clasificar = data[~data.index.isin(data_3000.index)].sample(n=50)
     datos_a_clasificar['Etiquetas'] = list(zip(datos_a_clasificar['RUBRO'], datos_a_clasificar['PRODUCTO RELACIONADO']))
 
 

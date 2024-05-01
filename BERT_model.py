@@ -1,58 +1,72 @@
 import torch
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, random_split
 from transformers import BertTokenizer, BertForSequenceClassification, AdamW, get_linear_schedule_with_warmup
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, MultiLabelBinarizer
-from sklearn.metrics import classification_report
-from scipy.special import softmax
-from sklearn.preprocessing import label_binarize
-from sklearn.metrics import roc_curve, auc
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc
 import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.special import softmax
 from itertools import cycle
 
 def BERT_model(data):
-    # Procesamiento de etiquetas
-    X = data['JUSTIFICACION']
-    mlb = MultiLabelBinarizer()
-    y = mlb.fit_transform(data['Etiquetas'])
-    
+    # Tokenización
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     max_length = 256
+
+    def tokenize_function(examples):
+        return tokenizer(examples, padding="max_length", truncation=True, max_length=max_length, return_tensors="pt")
     
-    label_encoder = LabelEncoder()
-    data['Etiquetas'] = label_encoder.fit_transform(data['Etiquetas'].astype(str))
+    # Preparar inputs
+    inputs = tokenize_function(data['JUSTIFICACION'].tolist())
+    input_ids = inputs['input_ids']
+    attention_masks = inputs['attention_mask']
 
-    def tokenizador(examples):
-        return tokenizer(examples['JUSTIFICACION'], padding="max_length", truncation=True, max_length=max_length)
+    # Preparación de etiquetas
+    mlb = MultiLabelBinarizer()
+    # Transformar cada tupla en una cadena única
+    # Limpieza y transformación de la columna 'Etiquetas'
+    data['Etiquetas'] = data['Etiquetas'].apply(
+        lambda x: ['-'.join(map(str, tup)) if isinstance(tup, tuple) else str(x) for tup in x] 
+        if isinstance(x, list) else [str(x)]
+    )
+    print(data['Etiquetas'].value_counts())
+    labels = mlb.fit_transform(data['Etiquetas'])
+    labels = torch.tensor(labels, dtype=torch.float32)
+    print(mlb.classes_)
+    print(labels.sum(axis=0))  # Utiliza el método .sum() de PyTorch directamente
 
-    tokenized_inputs = tokenizador(data.to_dict(orient='list'))
-    input_ids = torch.tensor(tokenized_inputs['input_ids'])
-    attention_masks = torch.tensor(tokenized_inputs['attention_mask'])
-    labels = torch.tensor(data['Etiquetas'].values)
+    # Crear dataset
     dataset = TensorDataset(input_ids, attention_masks, labels)
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-    train_dataloader = DataLoader(train_dataset, sampler=RandomSampler(train_dataset), batch_size=16)
-    validation_dataloader = DataLoader(val_dataset, sampler=SequentialSampler(val_dataset), batch_size=16)
+    # Dataloader
+    train_dataloader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+    validation_dataloader = DataLoader(val_dataset, batch_size=16, shuffle=False)
 
+    # Modelo BERT
     model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=len(mlb.classes_))
     model.cuda()
 
+    # Optimización
     optimizer = AdamW(model.parameters(), lr=2e-5, eps=1e-8)
-    epochs = 6
-    total_steps = len(train_dataloader) * epochs
+    total_steps = len(train_dataloader) * 6
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=total_steps)
 
-    for epoch in range(0, epochs):
+
+
+
+    # Entrenamiento
+    for epoch in range(6):
         model.train()
         total_loss = 0
-
         for batch in train_dataloader:
-            b_input_ids, b_input_mask, b_labels = [t.cuda() for t in batch]
+            batch = tuple(t.to(model.device) for t in batch)
+            b_input_ids, b_input_mask, b_labels = batch
             model.zero_grad()
             outputs = model(b_input_ids, token_type_ids=None, attention_mask=b_input_mask, labels=b_labels)
             loss = outputs.loss
@@ -61,60 +75,53 @@ def BERT_model(data):
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
-            avg_train_loss = total_loss / len(train_dataloader)
-        print(f"Epoch {epoch + 1}, Average Training Loss: {avg_train_loss}")
+        print(f"Epoch {epoch + 1}, Average Training Loss: {total_loss / len(train_dataloader)}")
 
+    # Evaluación
     model.eval()
-    predictions_bert, true_labels = [], []
-
+    all_logits = []
+    all_labels = []
     for batch in validation_dataloader:
-        batch = tuple(t.cuda() for t in batch)
+        batch = tuple(t.to(model.device) for t in batch)
         b_input_ids, b_input_mask, b_labels = batch
 
         with torch.no_grad():
-            outputs = model(b_input_ids, token_type_ids=None, attention_mask=b_input_mask)
+            outputs = model(b_input_ids, attention_mask=b_input_mask)
+            logits = outputs.logits
 
-        logits = outputs.logits
-        logits = logits.detach().cpu().numpy()
-        label_ids = b_labels.to('cpu').numpy()
+        all_logits.append(logits.cpu().numpy())
+        all_labels.append(b_labels.cpu().numpy())
 
-        predictions_bert.append(logits)
-        true_labels.append(label_ids)
+    all_logits = np.concatenate(all_logits, axis=0)
+    all_labels = np.concatenate(all_labels, axis=0)
+    predicted_classes = np.argmax(all_logits, axis=1)
+    true_classes = np.argmax(all_labels, axis=1)
 
-    predictions_bert = np.concatenate(predictions_bert, axis=0)
-    true_labels = np.concatenate(true_labels, axis=0)
-    probabilities_bert = softmax(predictions_bert, axis=1)  # Usando scipy.special.softmax
+    # Matriz de confusión
+    cm = confusion_matrix(true_classes, predicted_classes)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=mlb.classes_, yticklabels=mlb.classes_)
+    plt.title('Matriz de Confusión para BERT')
+    plt.ylabel('Etiquetas Verdaderas')
+    plt.xlabel('Etiquetas Predichas')
+    plt.show()
 
+    # Informe de clasificación
+    report = classification_report(true_classes, predicted_classes, target_names=mlb.classes_)
+    print(report)
 
-    probabilities = softmax(predictions_bert, axis=1)
-
-    # Inicializamos la figura para la curva ROC
-    plt.figure(figsize=(7, 5))
-
-    # Definimos los colores para cada curva
-    colors = cycle(['blue', 'red', 'green', 'purple', 'orange', 'cyan', 'magenta', 'yellow', 'black', 'pink', 'lightblue', 'lightgreen'])
-
-    # Obtenemos el número de clases
-    n_classes = len(np.unique(data['Etiquetas']))
-
-    # Iteramos sobre todas las clases
-    for i, color in zip(range(n_classes), colors):
-        # Calculamos la ROC para la clase i usando un enfoque one-vs-all
-        fpr, tpr, _ = roc_curve((true_labels == i).astype(int), probabilities[:, i])
+    # ROC Curve
+    probabilities = softmax(all_logits, axis=1)
+    plt.figure(figsize=(10, 8))
+    for i, color in zip(range(len(mlb.classes_)), cycle(['blue', 'red', 'green', 'purple', 'orange', 'cyan', 'magenta', 'yellow', 'black', 'pink', 'lightblue', 'lightgreen'])):
+        fpr, tpr, _ = roc_curve(all_labels[:, i], probabilities[:, i])
         roc_auc = auc(fpr, tpr)
+        plt.plot(fpr, tpr, color=color, label=f'Class {mlb.classes_[i]} (area = {roc_auc:.2f})')
 
-        # Dibujamos la curva ROC para la clase i
-        plt.plot(fpr, tpr, color=color, lw=2, label=f'ROC curve (class {i}) (area = {roc_auc:.2f})')
-
-    # Dibujamos la línea de la suerte
-    plt.plot([0, 1], [0, 1], 'k--', lw=2)
-    plt.xlim([-0.05, 1.0])
-    plt.ylim([0.0, 1.05])
+    plt.plot([0, 1], [0, 1], 'k--')
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title('Multiclass ROC Curve - BERT')
+    plt.title('ROC Curve')
     plt.legend(loc="lower right")
     plt.show()
-    return true_labels, probabilities_bert, mlb.classes_
 
-
+    return true_classes, predicted_classes, mlb.classes_

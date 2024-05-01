@@ -24,7 +24,8 @@ def load_data():
     data['Etiquetas'] = list(zip(data['RUBRO'], data['PRODUCTO RELACIONADO']))
     data.drop_duplicates(subset=['NIT','Etiquetas'],inplace=True)
     frecuencias = data['Etiquetas'].value_counts()
-    data['Etiquetas'] = data.apply(lambda fila: fila['Etiquetas'] if frecuencias[fila['Etiquetas']] > 150 else (0, 0), axis=1)
+    data['Etiquetas'] = data.apply(lambda fila: fila['Etiquetas'] if frecuencias[fila['Etiquetas']] > 100 else (0, 0), axis=1)
+    print(data['Etiquetas'].value_counts())
 
     return data
 
@@ -32,9 +33,9 @@ def main():
     data = load_data()
 
     # RF model
-    y_test_rf, probabilities_rf, classes_rf = RF_model(data)
+    #y_test_rf, probabilities_rf, classes_rf = RF_model(data)
     true_labels_bert, probabilities_bert, classes_bert = BERT_model(data)
-    llm_model(data)
+    #llm_model(data)
 
 if __name__ == '__main__':
     main()
